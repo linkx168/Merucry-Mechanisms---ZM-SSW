@@ -25,24 +25,22 @@ library(leaflet)
 -growth data from MN
 -zm and ssw lakes from mn infested waters list
 ```{r}
-mn_data <- open_dataset(sources = file.path("G:",
+#reading in the updated Minnesota data
+mn_data <- open_dataset(sources = file.path("D:",
                                             "Shared drives",
                                             "Hansen Lab",
                                             "RESEARCH PROJECTS",
                                             "Fish Survey Data",
-                                            "manuscript_products",
-                                            "ScienceBase",
-                                            "midwest_hive"),
-                        partitioning = "state") %>% 
+                                            "Parquet files",
+                                            "mn_update")) %>% 
   filter(state == "Minnesota" & !is.na(est_age))
 
 zm_ssw <- read_csv(file.path("D:",
                              "Shared drives",
                              "Hansen Lab",
                              "RESEARCH PROJECTS",
-                             "Statewide mercury modeling",
+                             "MAISRC Mercury Pathways 53.2",
                              "Data",
-                             "Covariate Data",
                              "zm_ssw_6jan2026.csv")) %>% 
   #filter out na dows or those "none"
   filter(!is.na(dow) & !(str_detect(dow, "n"))) %>% 
@@ -71,13 +69,13 @@ zm_ssw <- read_csv(file.path("D:",
 
 #crosswalk - get lat and lon from fish data
 xwalk <- open_dataset(sources = file.path("D:",
-                                          "Shared drives", 
-                                          "Hansen Lab", 
-                                          "RESEARCH PROJECTS",
-                                          "Fish Survey Data",
-                                          "Parquet files",
-                                          "hive_update"),
-                      partitioning = c("state")) %>% 
+                                            "Shared drives",
+                                            "Hansen Lab",
+                                            "RESEARCH PROJECTS",
+                                            "Fish Survey Data",
+                                            "Parquet files",
+                                            "mn_update")) %>% 
+  select(state, latitude_lake_centroid, lake_id, longitude_lake_centroid) %>% 
   filter(state == "Minnesota") %>% 
   filter(!is.na(latitude_lake_centroid) & !is.na(lake_id)) %>% 
   distinct(lake_id, latitude_lake_centroid, longitude_lake_centroid) %>% 
@@ -117,11 +115,11 @@ check <- mn_data %>%
                          !is.na(ssw) & is.na(zm) ~ "ssw",
                          !is.na(ssw) & !is.na(zm) ~ "both",
                          is.na(ssw) & is.na(zm) ~ "none"),
-         impact_zm = case_when(year >= zm ~ "before",
-                               year < zm ~ "after",
+         impact_zm = case_when(year >= zm ~ "after",
+                               year < zm ~ "before",
                                TRUE ~ "NA"),
-         impact_ssw = case_when(year >= ssw ~ "before",
-                                year < ssw ~ "after",
+         impact_ssw = case_when(year >= ssw ~ "after",
+                                year < ssw ~ "before",
                                 TRUE ~ "NA")) %>% 
   ungroup() %>% 
   distinct(lake_id, ais, species_1, impact_zm, impact_ssw) %>% 
@@ -217,17 +215,18 @@ years %>%
   facet_grid(species_1~ais, scales = "free")
 ```
 
-# Map 
+# Map (filtering for zebra mussel lakes with before and after data)
 ```{r}
 lake_species <- mn_data %>% 
   filter(alk == "year") %>% 
   left_join(zm_ssw, by = "lake_id") %>% 
-  select(-ssw) %>% 
   group_by(lake_id, species_1) %>% 
-  mutate(ais = case_when(!is.na(zm) ~ "zm",
-                         is.na(zm) ~ "uninvaded"),
-         impact_zm = case_when(year >= zm ~ "before",
-                               year < zm ~ "after",
+  mutate(ais = case_when(!is.na(zm) & is.na(ssw) ~ "zm",
+                         !is.na(ssw) & is.na(zm) ~ "ssw",
+                         !is.na(ssw) & !is.na(zm) ~ "both",
+                         is.na(ssw) & is.na(zm) ~ "uninvaded"),
+         impact_zm = case_when(year >= zm ~ "after",
+                               year < zm ~ "before",
                                TRUE ~ "NA")) %>% 
   ungroup() %>% 
   distinct(lake_id, ais, species_1, impact_zm) %>% 
@@ -236,7 +235,10 @@ lake_species <- mn_data %>%
   #zm_ssw has two a record for both zm and ssw for these lakes - leading an erroneous uninvaded row
   filter(!(lake_id == "18031100" & ais == "uninvaded") &
            !(lake_id == "4007900" & ais == "uninvaded")) %>% 
+  #filter for cases where uninvaded lakes have data and invaded systems have pre and post
   mutate(timing = case_when(ais == "uninvaded" ~ "y",
+                            ais == "ssw" ~ "n",
+                            ais == "both" ~ "n",
                             ais == "zm" & !is.na(after) & !is.na(before) ~ "y",
                             TRUE ~ "n")) %>% 
   filter(timing == "y")
@@ -245,10 +247,19 @@ lake_species <- mn_data %>%
 lake_species <- lake_species %>% 
   left_join(xwalk) %>% 
   filter(!is.na(latitude_lake_centroid)) %>% 
-  select(lake_id, species_1, ais, latitude_lake_centroid, longitude_lake_centroid)
+  select(lake_id, species_1, ais, latitude_lake_centroid, longitude_lake_centroid) %>% 
+  #clean up species names 
+  mutate(species_clean = case_when(species_1 == "black_crappie" ~ "Black Crappie",
+                               species_1 == "bluegill" ~ "Bluegill",
+                               species_1 == "cisco" ~ "Cisco",
+                               species_1 == "largemouth_bass" ~ "Largemouth Bass",
+                               species_1 == "northern_pike" ~ "Northern Pike",
+                               species_1 == "smallmouth_bass" ~ "Smallmouth Bass",
+                               species_1 == "walleye" ~ "Walleye",
+                               species_1 == "yellow_perch" ~ "Yellow Perch"))
 
 lake_sf <- lake_species %>%
-  distinct(lake_id, species_1, ais, latitude_lake_centroid, longitude_lake_centroid) %>%
+  distinct(lake_id, species_clean, ais, latitude_lake_centroid, longitude_lake_centroid) %>%
   st_as_sf(coords = c("longitude_lake_centroid", "latitude_lake_centroid"), crs = 4326)
 
 us_states <- ne_states(country = "United States of America", returnclass = "sf")
@@ -260,26 +271,25 @@ lake_zm <- lake_sf %>% filter(ais == "zm")
 
 ggplot() +
   geom_sf(data = mn_border, fill = NA, color = "black") +
-  geom_sf(data = lake_uninvaded, color = "lightblue", alpha = 0.6, size = 2) +
-  geom_sf(data = lake_zm, color = "salmon", alpha = 0.9, size = 2.5) +
-  facet_wrap(~ species_1) +
+  geom_sf(data = lake_uninvaded, color = "lightblue", alpha = 0.5, size = 1) +
+  geom_sf(data = lake_zm, color = "salmon", alpha = 0.75, size = 1) +
+  facet_wrap(~ species_clean) +
   theme_minimal() +
   labs(color = "Invasion") +
   coord_sf(xlim = st_bbox(mn_border)[c("xmin", "xmax")],
-           ylim = st_bbox(mn_border)[c("ymin", "ymax")])
+           ylim = st_bbox(mn_border)[c("ymin", "ymax")]) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+#ggsave("all_spec_map.jpg", height = 5, width = 5)
 
 #subset
 lake_species_sub <- lake_species %>% 
   left_join(xwalk) %>% 
   filter(!is.na(latitude_lake_centroid)) %>% 
-  select(lake_id, species_1, ais, latitude_lake_centroid, longitude_lake_centroid) %>% 
-  filter(species_1 %in% c("walleye", "northern_pike", "bluegill")) %>% 
-  mutate(species_clean = case_when(species_1 == "walleye" ~ "Walleye",
-                                   species_1 == "northern_pike" ~ "Northern Pike",
-                                   species_1 == "bluegill" ~ "Bluegill"))
+  select(lake_id, species_clean, species_1, ais, latitude_lake_centroid, longitude_lake_centroid) %>% 
+  filter(species_clean %in% c("Walleye", "Northern Pike", "Bluegill"))
 
 lake_sf <- lake_species_sub %>%
-  distinct(lake_id, species_clean, ais, latitude_lake_centroid, longitude_lake_centroid) %>%
+  distinct(lake_id, species_clean, species_1, ais, latitude_lake_centroid, longitude_lake_centroid) %>%
   st_as_sf(coords = c("longitude_lake_centroid", "latitude_lake_centroid"), crs = 4326)
 
 lake_uninvaded <- lake_sf %>% filter(ais == "uninvaded")
@@ -287,23 +297,41 @@ lake_zm <- lake_sf %>% filter(ais == "zm")
 
 ggplot() +
   geom_sf(data = mn_border, fill = NA, color = "black") +
-  geom_sf(data = lake_uninvaded, color = "lightblue", alpha = 0.6, size = 1.5) +
-  geom_sf(data = lake_zm, color = "salmon", alpha = 0.9, size = 2) +
+  geom_sf(data = lake_uninvaded, color = "lightblue", alpha = 0.5, size = 1) +
+  geom_sf(data = lake_zm, color = "salmon", alpha = 0.75, size = 1) +
   facet_wrap(~ species_clean) +
   theme_minimal() +
   theme(panel.grid = element_blank(),
-        strip.text = element_text(size = 12)) +
+        strip.text = element_text(size = 12),
+        axis.text.x = element_text(angle = 30, hjust = 1)) +
   labs(color = "Invasion") +
   coord_sf(xlim = st_bbox(mn_border)[c("xmin", "xmax")],
            ylim = st_bbox(mn_border)[c("ymin", "ymax")])
+#ggsave("filtered_spec_map.jpg", height = 3, width = 5)
+
+rm(check,
+   invasion_counts,
+   invasion_summary,
+   lake_sf,
+   lake_species,
+   lake_uninvaded,
+   lake_zm,
+   mn_border,
+   ssw_lakes,
+   ssw_lakes_both,
+   us_states,
+   years)
 ```
 
-# Pulling in the raw data
+# ZM, WAE-NOP-BLG raw fish data for growth
 ```{r}
 age_data <- mn_data %>% 
+  #filter MN data for fish with alked year level data
   filter(alk == "year") %>% 
+  #filtering join to the lake-species combos we want
   right_join(lake_species_sub, by = c("lake_id", "species_1"), suffix = c("_fish", "_invasion")) %>% 
   collect() %>% 
+  #selecting columns important from the fish data that are relevant 
   select(lake_id,
          nhdhr_id,
          date_total_effort_ident,
@@ -325,20 +353,91 @@ age_data <- mn_data %>%
          weight_unit_1,
          flag,
          notes_1) %>% 
+  #bring in invasion data 
   left_join(zm_ssw, by = "lake_id") %>% 
-  mutate(impact_zm = case_when(year >= zm ~ "before",
-                               year < zm ~ "after",
+  #create columns for invasion impact for both invaders
+  mutate(impact_zm = case_when(year >= zm ~ "after",
+                               year < zm ~ "before",
                                TRUE ~ NA),
-         impact_ssw = case_when(year >= ssw ~ "before",
-                                year < ssw ~ "after",
+         impact_zm_years = year - zm,
+         impact_ssw = case_when(year >= ssw ~ "after",
+                                year < ssw ~ "before",
                                 TRUE ~ NA),
          ais = case_when(!is.na(zm) & is.na(ssw) ~ "zm",
                          !is.na(ssw) & is.na(zm) ~ "ssw",
                          !is.na(ssw) & !is.na(zm) ~ "both",
                          is.na(ssw) & is.na(zm) ~ "none")) 
-glimpse(age_data)
-
 age_data  %>% 
   group_by(ais) %>% 
   summarise(n_distinct(lake_id))
+#we see here we have 
 ```
+
+#now let's filter more closely for analysis 
+-we want pre and post zebra mussel
+  -filter for age 0-3 fish and sampling in zebra mussel lakes must be at least three years after        invasion
+-we will assign pre/post to uninvaded systems based on the nearest zebra mussel lake spatially
+```{r}
+#add exposure to zebra mussels in the fish's life
+age_data <- age_data %>% 
+  filter(ais == "zm") %>% 
+  mutate(birth_year = year - est_age,
+         zm_lag = zm + 2,
+         #we want fish that were captured before invasion AND fish born after invasion
+         exposure = case_when(year <= zm_lag ~ "before",
+                              birth_year >= zm_lag ~ "after",
+                              TRUE ~ "mixed")) 
+
+#how many fish do we have in each category 
+age_data %>% 
+  group_by(species_1) %>% 
+  summarise(n_fish_before = sum(exposure == "before"),
+            n_fish_after = sum(exposure == "after"),
+            n_fish_mixed = sum(exposure == "mixed"))
+
+age_data %>% 
+  group_by(lake_id, species_1, year, zm_lag, exposure) %>% 
+  summarise(n_fish = n(),
+            n_age_classes = n_distinct(est_age))
+
+
+#filter for fish that only have before and after (est ages could be based on mixed cohorts before and after)
+less_restrictive <- age_data %>% 
+  group_by(lake_id, species_1) %>% 
+  summarise(
+    has_before = any(exposure == "before"),
+    has_after  = any(exposure == "after"),
+    .groups = "drop"
+  ) %>% 
+  filter(has_before & has_after)
+
+#now lets do a more restrictive filtering for only when an alk contains pre and post fish (no mixing)
+#the only change here is that I filter for places where only age exists and then do the filtering 
+actual_age_data <- age_data %>% 
+  filter(ais == "zm" & !is.na(age)) %>% 
+  mutate(birth_year = year - age,
+         zm_lag = zm + 2,
+         #we want fish that were captured before invasion AND fish born after invasion
+         exposure = case_when(year <= zm_lag ~ "before",
+                              birth_year >= zm_lag ~ "after",
+                              TRUE ~ "mixed")) 
+
+#two step fitler here that removes lake-speices-years that are mixed across the invasion year
+more_restrictive <- actual_age_data %>% 
+   group_by(lake_id, species_1, year) %>% 
+  summarise(
+    has_before = any(exposure == "before"),
+    has_after  = any(exposure == "after"),
+    has_mixed = any(exposure == "mixed"),
+    .groups = "drop"
+  ) %>% 
+  filter(has_mixed == F) %>% 
+  group_by(lake_id, species_1) %>% 
+  summarise(
+    has_before = any(has_before == T),
+    has_after  = any(has_after == T),
+    .groups = "drop"
+  ) %>%
+  filter(has_before & has_after) 
+```
+*I stopped right here on 3/24: I did two different filters. The first filters at the est age level so that we do not include fish that have an estimated age that spans the zebra mussel invasion, but the ALK could be constructed of a cohort of fish that lived in both conditions. My second filtering looks at the actual observed ages, making sure that the birth years do not cross the invasion line, such that the ALK is constructed in such a way that the fish only have lived in either condition. I still need to gather those fish. For the more restrictive grouping I will need to make sure that I don't still pick up the mixed groups if there was a mixed year and an after year in the lake-species*
