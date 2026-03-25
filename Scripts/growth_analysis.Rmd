@@ -535,6 +535,13 @@ fit_vb <- brm(
   backend = "cmdstanr", 
   threads = threading(2) 
 )
+saveRDS(fit_vb, file.path("G:",
+                          "Shared drives",
+                          "Hansen Lab",
+                          "RESEARCH PROJECTS",
+                          "MAISRC Mercury Pathways 53.2",
+                          "Growth Analysis",
+                          "growth_fit.rds"))
 
 ########explore convergence##############
 plot(fit_vb)
