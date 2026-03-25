@@ -589,3 +589,75 @@ mean(as.vector(pred0))
 #mean after
 mean(as.vector(pred1))
 ```
+
+#data filtering/structure viz
+```{r}
+# Data for bars (sampling years and cohort spans)
+df <- data.frame(
+  group = c("2011", "2016", "2020"),
+  y = c(1, 2, 3),
+  start = c(2006, 2011, 2015),  # 6 years back (ages 0–5)
+  end   = c(2011, 2016, 2020)
+)
+
+# Mixed portion (part to filter out)
+mixed <- data.frame(
+  y = 2,
+  start = 2011,
+  end = 2013
+)
+
+# Plot
+ggplot() +
+  # Background shading
+  annotate("rect", xmin = 2005, xmax = 2013, ymin = 0.5, ymax = 3.5,
+           fill = "#9ecae1", alpha = 0.6) +
+  annotate("rect", xmin = 2013, xmax = 2020, ymin = 0.5, ymax = 3.5,
+           fill = "#fcbba1", alpha = 0.6) +
+
+  # Bars (full cohorts)
+  geom_rect(data = df,
+            aes(xmin = start, xmax = end, ymin = y - 0.2, ymax = y + 0.2),
+            fill = "#de6b48", color = "black") +
+
+  # Before-only bar recolored
+  geom_rect(data = subset(df, group == "2011"),
+            aes(xmin = start, xmax = end, ymin = y - 0.2, ymax = y + 0.2),
+            fill = "#2b6c8a", color = "black") +
+
+  # Mixed filtered portion
+  geom_rect(data = mixed,
+            aes(xmin = start, xmax = end, ymin = y - 0.2, ymax = y + 0.2),
+            fill = "#ffff33", color = "black") +
+
+  # Invasion line
+  geom_segment(
+  aes(x = 2013, xend = 2013, y = 0.5, yend = 3.5),
+  linewidth = 1 )+
+
+  # Labels
+  annotate("text", x = 2013, y = 3.7, label = "ZM Invasion\n2013", vjust = 0) +
+  annotate("text", x = 2009, y = 3.7, label = "Before") +
+  annotate("text", x = 2017, y = 3.7, label = "After") +
+  annotate("text", x = 2012, y = 2, label = "Filtered Out", size = 3) +
+
+  # Axis formatting
+  scale_x_continuous(breaks = seq(2005, 2020, 1)) +
+  scale_y_continuous(NULL, breaks = NULL) +
+
+  # Theme
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = 
+  ) +
+
+  labs(
+    x = "Year",
+    caption = "*Each surveyed lake-year includes ages 0–5\n*Bars span birth years of observed cohorts"
+  )
+ggsave("data_structure.jpg", width = 7, height = 5)
+```
+
+
