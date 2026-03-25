@@ -20,6 +20,9 @@ library(rnaturalearth)
 library(rnaturalearthdata)
 library(leaflet)
 library(brms)
+#speeds up model fitting
+library(cmdstanr)
+options(brms.backend = "cmdstanr")
 ```
 
 # Data
@@ -27,7 +30,7 @@ library(brms)
 -zm and ssw lakes from mn infested waters list
 ```{r}
 #reading in the updated Minnesota data
-mn_data <- open_dataset(sources = file.path("D:",
+mn_data <- open_dataset(sources = file.path("G:",
                                             "Shared drives",
                                             "Hansen Lab",
                                             "RESEARCH PROJECTS",
@@ -36,7 +39,7 @@ mn_data <- open_dataset(sources = file.path("D:",
                                             "mn_update")) %>% 
   filter(state == "Minnesota" & !is.na(est_age))
 
-zm_ssw <- read_csv(file.path("D:",
+zm_ssw <- read_csv(file.path("G:",
                              "Shared drives",
                              "Hansen Lab",
                              "RESEARCH PROJECTS",
@@ -69,7 +72,7 @@ zm_ssw <- read_csv(file.path("D:",
          ssw = `starry stonewort`)
 
 #crosswalk - get lat and lon from fish data
-xwalk <- open_dataset(sources = file.path("D:",
+xwalk <- open_dataset(sources = file.path("G:",
                                             "Shared drives",
                                             "Hansen Lab",
                                             "RESEARCH PROJECTS",
@@ -454,7 +457,6 @@ before_after_fish <- age_data %>%
 #   ) %>%
 #   filter(has_before & has_after) 
 ```
-*I stopped right here on 3/24: I did two different filters. The first filters at the est age level so that we do not include fish that have an estimated age that spans the zebra mussel invasion, but the ALK could be constructed of a cohort of fish that lived in both conditions. My second filtering looks at the actual observed ages, making sure that the birth years do not cross the invasion line, such that the ALK is constructed in such a way that the fish only have lived in either condition. I still need to gather those fish. For the more restrictive grouping I will need to make sure that I don't still pick up the mixed groups if there was a mixed year and an after year in the lake-species*
 
 # fitting model
 ```{r}
@@ -523,13 +525,15 @@ before_after_fish %>%
 #######fit model########################
 fit_vb <- brm(
   vb_formula,
-  data = fish_brms,
+  data = before_after_fish,
   prior = priors,
   chains = 4,
   cores = 4,
-  iter = 15000,
-  warmup = 10000,
-  control = list(adapt_delta = 0.95, max_treedepth = 15)
+  iter = 3000,
+  warmup = 1500,
+  control = list(adapt_delta = 0.95, max_treedepth = 15),
+  backend = "cmdstanr", 
+  threads = threading(2) 
 )
 
 ########explore convergence##############
@@ -540,7 +544,7 @@ summary(fit_vb)
 # generate curves before and after 
 ```{r}
 # age grid starting at 0 increasing by 0.1 until the max value from the fitted data
-age_grid <- seq(0, max(fish_brms$age, na.rm = TRUE), by = 0.1)
+age_grid <- seq(0, max(before_after_fish$est_age, na.rm = TRUE), by = 0.1)
 
 #expand that for both before and after values
 newdata <- expand.grid(
