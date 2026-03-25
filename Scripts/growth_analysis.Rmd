@@ -19,6 +19,7 @@ library(ggthemes)
 library(rnaturalearth)
 library(rnaturalearthdata)
 library(leaflet)
+library(brms)
 ```
 
 # Data
@@ -216,6 +217,8 @@ years %>%
 ```
 
 # Map (filtering for zebra mussel lakes with before and after data)
+*In the future this should be moved after filtering to represent the data that are being modeled*
+   -this will involve retaining some objects created for the following chunk
 ```{r}
 lake_species <- mn_data %>% 
   filter(alk == "year") %>% 
@@ -374,16 +377,18 @@ age_data  %>%
 ```
 
 #now let's filter more closely for analysis 
--we want pre and post zebra mussel
-  -filter for age 0-3 fish and sampling in zebra mussel lakes must be at least three years after        invasion
--we will assign pre/post to uninvaded systems based on the nearest zebra mussel lake spatially
+-there are several ways we could filter to pull out the zm effect
+1. create an exposure variable based on the estimated age of the fish, filter for fish that were sampled before invasion (before grouping) or birth year is after invasion (after)... do not keep fish with birth year before invasion but sampled after (mixed) 
+*Problem: some cohorts in the ALKs that generate this data could straddle invasion with their life*
+2. filter for cases when the entire cohort of the ALK is after ZM invasion
+   -more restrictive, less lake-species 
 ```{r}
 #add exposure to zebra mussels in the fish's life
 age_data <- age_data %>% 
   filter(ais == "zm") %>% 
   mutate(birth_year = year - est_age,
          zm_lag = zm + 2,
-         #we want fish that were captured before invasion AND fish born after invasion
+         #we want fish that were captured before lag invasion AND fish born after invasion lag
          exposure = case_when(year <= zm_lag ~ "before",
                               birth_year >= zm_lag ~ "after",
                               TRUE ~ "mixed")) 
@@ -411,33 +416,176 @@ less_restrictive <- age_data %>%
   ) %>% 
   filter(has_before & has_after)
 
+#now join back to fish level and filter out "fish that cross the line"
+before_after_fish <- age_data %>% 
+  inner_join(less_restrictive, by = c("lake_id", "species_1")) %>% 
+  filter(exposure %in% c("before", "after"))
+
+##################################################################################
+
+#as of MAR 25, I never finalized the more restrictive filtering, but the outline is below
+
 #now lets do a more restrictive filtering for only when an alk contains pre and post fish (no mixing)
 #the only change here is that I filter for places where only age exists and then do the filtering 
-actual_age_data <- age_data %>% 
-  filter(ais == "zm" & !is.na(age)) %>% 
-  mutate(birth_year = year - age,
-         zm_lag = zm + 2,
-         #we want fish that were captured before invasion AND fish born after invasion
-         exposure = case_when(year <= zm_lag ~ "before",
-                              birth_year >= zm_lag ~ "after",
-                              TRUE ~ "mixed")) 
-
-#two step fitler here that removes lake-speices-years that are mixed across the invasion year
-more_restrictive <- actual_age_data %>% 
-   group_by(lake_id, species_1, year) %>% 
-  summarise(
-    has_before = any(exposure == "before"),
-    has_after  = any(exposure == "after"),
-    has_mixed = any(exposure == "mixed"),
-    .groups = "drop"
-  ) %>% 
-  filter(has_mixed == F) %>% 
-  group_by(lake_id, species_1) %>% 
-  summarise(
-    has_before = any(has_before == T),
-    has_after  = any(has_after == T),
-    .groups = "drop"
-  ) %>%
-  filter(has_before & has_after) 
+# actual_age_data <- age_data %>% 
+#   filter(ais == "zm" & !is.na(age)) %>% 
+#   mutate(birth_year = year - age,
+#          zm_lag = zm + 2,
+#          #we want fish that were captured before invasion AND fish born after invasion
+#          exposure = case_when(year <= zm_lag ~ "before",
+#                               birth_year >= zm_lag ~ "after",
+#                               TRUE ~ "mixed")) 
+# 
+# #two step filter here that removes lake-speices-years that are mixed across the invasion year
+# more_restrictive <- actual_age_data %>% 
+#    group_by(lake_id, species_1, year) %>% 
+#   summarise(
+#     has_before = any(exposure == "before"),
+#     has_after  = any(exposure == "after"),
+#     has_mixed = any(exposure == "mixed"),
+#     .groups = "drop"
+#   ) %>% 
+#   filter(has_mixed == F) %>% 
+#   group_by(lake_id, species_1) %>% 
+#   summarise(
+#     has_before = any(has_before == T),
+#     has_after  = any(has_after == T),
+#     .groups = "drop"
+#   ) %>%
+#   filter(has_before & has_after) 
 ```
 *I stopped right here on 3/24: I did two different filters. The first filters at the est age level so that we do not include fish that have an estimated age that spans the zebra mussel invasion, but the ALK could be constructed of a cohort of fish that lived in both conditions. My second filtering looks at the actual observed ages, making sure that the birth years do not cross the invasion line, such that the ALK is constructed in such a way that the fish only have lived in either condition. I still need to gather those fish. For the more restrictive grouping I will need to make sure that I don't still pick up the mixed groups if there was a mixed year and an after year in the lake-species*
+
+# fitting model
+```{r}
+########write out fish growth formula for modeling###############
+vb_formula <- bf(
+  #linf = asymptoic length, exp(lk) = growth coefficient k, t0 = curve shift (theoretical age at length 0)
+  length_1 ~ Linf * (1 - exp(-exp(lk) * (est_age - t0))),
+  
+  #Asymptotic length - each lake gets its own baseline growth and invasion response
+  Linf ~ 1 + after + species_1 + (1 + after | lake_id)
+  ,
+  #growth coefficient - each lake gets its own baseline growth and invasion response
+  lk   ~ 1 + after + species_1 + (1 + after | lake_id)
+  ,
+  #keep t0 shared across groups
+  t0   ~ 1,
+  nl = TRUE
+)
+
+#structure as of MAR 25, things to conciser:
+#adding species specific nested response in random effect to allow species to vary in response across lakes
+#adding year as a random effect if we think year could play an important explainer (which it could if years are warmer/colder)
+
+##############put on some priors##########################
+priors <- c(
+  # Intercepts (population-level)
+  prior(normal(50, 25), class = "b", nlpar = "Linf", coef = "Intercept"), #mean of 50 ranging from 0-100, informative but within reason
+  prior(normal(log(0.2), 1), class = "b", nlpar = "lk", coef = "Intercept"), #mean of 0.2 roughly (0.03-1.5), covers very slow and fast growth but limits to anything really insane
+  prior(normal(0, 1), class = "b", nlpar = "t0", coef = "Intercept"), # most mass between -2 and 2
+
+  # Fixed effects (after)
+  prior(normal(0, 10), class = "b", nlpar = "Linf", coef = "after"), # after can shift roughly +/- 20 units, wide enough for expected biological affects
+  prior(normal(0, 0.5), class = "b", nlpar = "lk", coef = "after"), # allows big biological effects but prevents wild over fitting in growth rate
+  
+  # Species effect - assume difference are pretty moderate between species 
+  prior(normal(0, 15), class = "b", nlpar = "Linf"),
+  prior(normal(0, 0.5), class = "b", nlpar = "lk"),
+
+  # Group-level SDs (random effects)
+  prior(exponential(1), class = "sd", nlpar = "Linf", group = "lake_id"), #intercept
+  prior(exponential(1), class = "sd", nlpar = "lk", group = "lake_id"), #intercept
+  
+  prior(exponential(1), class = "sd", nlpar = "Linf", group = "lake_id", coef = "after"), #slopes
+  prior(exponential(1), class = "sd", nlpar = "lk", group = "lake_id", coef = "after"), #slopes
+  
+  #correlation between random intercepts and slopes
+  prior(lkj(2), class = "cor", group = "lake_id"),
+
+  # Residual
+  # heavy tails, centered at 0 - allows residual SD up to 20-30 without any resistance
+  prior(student_t(3, 0, 10), class = "sigma")
+)
+
+#######filter data for model fitting#########################
+glimpse(before_after_fish)
+#need year to be a factor
+before_after_fish <- before_after_fish %>% 
+  mutate(year = as.factor(year)) %>% 
+  mutate(after = case_when(exposure == "before" ~ 0,
+                           exposure == "after" ~ 1))
+
+before_after_fish %>% 
+  group_by(exposure, after) %>% 
+  count()
+
+#######fit model########################
+fit_vb <- brm(
+  vb_formula,
+  data = fish_brms,
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 15000,
+  warmup = 10000,
+  control = list(adapt_delta = 0.95, max_treedepth = 15)
+)
+
+########explore convergence##############
+plot(fit_vb)
+summary(fit_vb)
+```
+
+# generate curves before and after 
+```{r}
+# age grid starting at 0 increasing by 0.1 until the max value from the fitted data
+age_grid <- seq(0, max(fish_brms$age, na.rm = TRUE), by = 0.1)
+
+#expand that for both before and after values
+newdata <- expand.grid(
+  age = age_grid,
+  after = c(0,1)
+)
+
+# get posterior predicted draws of the expected value (not including obs noise)
+# use posterior_epred for expected value of response; re_formula = NA for population-level only
+epreds <- posterior_epred(fit_vb, newdata = newdata, re_formula = NA)
+
+# epreds: draws x rows(newdata)
+# summarize to mean and 95% CI
+pred_summary <- as.data.frame(t(apply(epreds, 2, function(x) {
+  c(mu = mean(x), lwr = quantile(x, 0.025), upr = quantile(x, 0.975))
+})))
+pred_summary <- bind_cols(newdata, pred_summary)
+
+# plot
+ggplot(pred_summary, aes(x = age, y = mu, color = factor(after), fill = factor(after))) +
+  geom_ribbon(aes(ymin = `lwr.2.5%`, ymax = `upr.97.5%`), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  labs(color = "after", y = "Length (mm)", x = "Age") +
+  scale_fill_manual("Invasion", values = c("lightblue", "salmon"), labels = c("Before", "After")) +
+  scale_color_manual("Invasion", values = c("lightblue", "salmon"), labels = c("Before", "After")) +
+  geom_vline(xintercept = 3, linetype = "dashed") +
+  geom_hline(yintercept = 381, linetype = "dashed") +
+  theme_minimal() +
+  theme(legend.position = c(0.8, 0.1))
+#ggsave("wae_wb_zm_growth.jpg", height = 5, width = 5)
+```
+
+# generate lengths at age 3 for before and after zm invasion
+```{r}
+nd0 <- data.frame(age = 3, after = 0)
+nd1 <- data.frame(age = 3, after = 1)
+
+pred0 <- posterior_epred(fit_vb, newdata = nd0, re_formula = NA) # draws x 1
+pred1 <- posterior_epred(fit_vb, newdata = nd1, re_formula = NA)
+
+diff_draws <- as.vector(pred1) - as.vector(pred0)
+quantile(diff_draws, c(0.025, 0.5, 0.975))
+
+#mean before
+mean(as.vector(pred0))
+#mean after
+mean(as.vector(pred1))
+```
