@@ -836,3 +836,17 @@ study_hg %>%
   facet_grid(WATERWAY~SPEC)
 ```
 
+# looking at kornois - was it always just high in mercury?
+```{r}
+koronis <- hg %>% 
+  filter(str_detect(WATERWAY, "ORONIS"))
+
+koronis %>% 
+  filter(SPEC == "WAE") %>% 
+  ggplot() +
+  geom_point(aes(LGTHIN, log(HGPPM), color = as.factor(YEARCOLL))) +
+  geom_smooth(aes(LGTHIN, log(HGPPM), color = as.factor(YEARCOLL)), method = "lm") +
+  geom_vline(xintercept = 15) +
+  geom_hline(yintercept = log(0.22)) 
+```
+
