@@ -201,6 +201,11 @@ zm_ssw_lakes <- zm_ssw_lakes %>%
   local_to_lagos(from_colname = "dow",states = "mn") %>% 
   mutate(lagoslakeid = as.numeric(lagos.id)) %>% 
   left_join(covary)
+
+dnr_fish_map_data <- dnr_fish %>% 
+  local_to_lagos(from_colname = "dow", states = "mn") %>% 
+  mutate(lagoslakeid = as.numeric(lagos.id)) %>% 
+  left_join(covary) 
 rm(covary)
 
 #add some mercury info
@@ -210,6 +215,9 @@ hg_years <- hg %>%
 
 zm_ssw_lakes <- zm_ssw_lakes %>% 
   left_join(hg_years)
+
+dnr_fish_map_data <- dnr_fish_map_data %>% 
+  left_join(hg_years)
 rm(hg_years)
 
 # add in 2026 fisheries surveys
@@ -217,6 +225,10 @@ zm_ssw_lakes <- zm_ssw_lakes %>%
   left_join(dnr_fish) %>% 
   mutate(to_be_surveyed_fish = case_when(!is.na(survey_type) ~ "y",
                                          TRUE ~ "n"))
+
+#only keep uninvaded lakes for fish surveys mapping on the one object created for this
+dnr_fish_map_data <- dnr_fish_map_data %>% 
+  anti_join(zm_ssw_lakes, by = "dow")
 ```
 
 
@@ -616,6 +628,132 @@ rm(pal,
    )
 ```
 
+# Uninvaded lakes with 2026 fisheries survey 
+```{r}
+fish_map <- dnr_fish_map_data %>%
+  rename(fish_survey = survey_type,
+         fish_gears = survey_components_proposed) %>% 
+  mutate(
+    popup_text = paste0(
+      "<b>", lake_namelagos, "</b><br>",
+      "DOW: ", dow, "<br>",
+      "Lake area (ha): ", round(ws_focallakewaterarea_ha,1), "<br>",
+      "Watershed area (ha): ", round(ws_area_ha,1), "<br>",
+      "WS:Lake ratio: ", round(ws_lake_arearatio,2), "<br>",
+      "Wooded wetland %: ", round(nlcd_wetwood90_pct,1), "<br>",
+      "Emergent wetland %: ", round(nlcd_wetemerg95_pct,1), "<br>",
+      "Hg Years : ", n_hg_years, "<br>",
+      "Notes: ", ifelse(is.na(notes),"",notes), "<br>",
+      "Fish Survey : ", fish_survey, "<br>",
+      "Fish Gears : ", fish_gears
+    )
+  )
+
+fish_map_display <- leaflet(fish_map) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addCircleMarkers(
+    lng = ~lake_lon_decdeg,
+    lat = ~lake_lat_decdeg,
+    color = "black",
+    weight = 1,
+    fillOpacity = 0.8,
+    popup = ~popup_text,
+    label = ~lake_namelagos
+  )
+fish_map_display
+#htmlwidgets::saveWidget(fish_map_display, "fish_surveys_uninvaded.html", selfcontained = TRUE)
+rm(fish_map_display)
+```
+
+# "Finalized" lakes
+```{r}
+final <- bind_rows(all_map, fish_map)
+
+#filter for the lakes
+final_map <- final %>% 
+  filter(dow %in% c("73003800",
+                    "73013800",
+                    "34007900",
+                    "86009000",
+                    "73020000",
+                    "27010400",
+                    "34008600",
+                    "73003700",
+                    "21014500",
+                    "61013000",
+                    "34016900",
+                    
+                    #leech area
+                    "04001100",
+                    "04015900",
+                    "29015600",
+                    "11041300",
+                    "11020300",
+                    "04007900",
+                    "11050500",
+                    "11016700",
+                    "04006900",
+                    "11020100",
+                    "11014700",
+                    "11037100")) %>% 
+    mutate(invasion = case_when(is.na(invasion) ~ "None",
+                                TRUE ~ invasion),
+           backup = case_when(dow %in% c("04006900",
+                    "11020100",
+                    "11014700",
+                    "11037100",
+                    "21014500",
+                    "61013000",
+                    "34016900"
+                    ) ~ "y",
+                    TRUE ~ "n"),
+    popup_text = paste0(
+      "<b>", lake_namelagos, "</b><br>",
+      "DOW: ", dow, "<br>",
+      "Invasion: ", invasion, "<br>",
+      "SSW year: ", ssw_year_infested, "<br>",
+      "ZM year: ", zm_year_infested, "<br>",
+      "Lake area (ha): ", round(ws_focallakewaterarea_ha,1), "<br>",
+      "Watershed area (ha): ", round(ws_area_ha,1), "<br>",
+      "WS:Lake ratio: ", round(ws_lake_arearatio,2), "<br>",
+      "Wooded wetland %: ", round(nlcd_wetwood90_pct,1), "<br>",
+      "Emergent wetland %: ", round(nlcd_wetemerg95_pct,1), "<br>",
+      "Hg Years : ", n_hg_years, "<br>",
+      "Notes: ", ifelse(is.na(notes),"",notes), "<br>",
+      "Fish Survey : ", fish_survey, "<br>",
+      "Fish Gears : ", fish_gears
+    )
+  )
+
+pal <- colorFactor(
+  palette = c("green", "darkred", "lightblue", "black"),
+  domain = final_map$invasion
+)
+
+final_display <- leaflet(final_map) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addCircleMarkers(
+    lng = ~ws_lon_decdeg,
+    lat = ~ws_lat_decdeg,
+    fillColor = ~pal(invasion),
+    color = "black",
+    radius = ~ifelse(backup == "y", 3, 10), 
+    weight = 1,
+    fillOpacity = 0.8,
+    popup = ~popup_text,
+    label = ~lake_namelagos
+  ) %>%
+  addLegend(
+    "bottomright",
+    pal = pal,
+    values = ~invasion,
+    title = "Lake category"
+  ) 
+final_display
+#htmlwidgets::saveWidget(final_display, "final_display.html", selfcontained = TRUE)
+```
+
+
 # Lakes in Prior Study
 ```{r}
 study_dows <- read_csv(file.path("D:",
@@ -696,5 +834,19 @@ study_hg %>%
   geom_point(aes(LGTHIN, log(HGPPM), color = zm)) +
   geom_smooth(aes(LGTHIN, log(HGPPM), color = zm), method = "lm") +
   facet_grid(WATERWAY~SPEC)
+```
+
+# looking at kornois - was it always just high in mercury?
+```{r}
+koronis <- hg %>% 
+  filter(str_detect(WATERWAY, "ORONIS"))
+
+koronis %>% 
+  filter(SPEC == "WAE") %>% 
+  ggplot() +
+  geom_point(aes(LGTHIN, log(HGPPM), color = as.factor(YEARCOLL))) +
+  geom_smooth(aes(LGTHIN, log(HGPPM), color = as.factor(YEARCOLL)), method = "lm") +
+  geom_vline(xintercept = 15) +
+  geom_hline(yintercept = log(0.22)) 
 ```
 
