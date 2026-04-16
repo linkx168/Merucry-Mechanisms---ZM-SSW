@@ -195,7 +195,7 @@ ages_global <- ages_within_lake %>%
 
 #################stopped right here, I need to filter for cases where ages exsits before and after AND across all lakes, it was breaking for some reason right here... looks like some "drop" exposure was coming back########
 #I think i found why - I had exposure spelt wrong in the fitler above - rerun and check
-required_ages <- 2:5
+required_ages <- 1:5
 
 valid_lakes <- wae %>%
   filter(est_age %in% required_ages) %>%
@@ -206,10 +206,11 @@ valid_lakes <- wae %>%
     max_age = max(est_age),
     .groups = "drop"
   ) %>% 
-  filter(n_ages == 4, min_age == 2, max_age == 5) %>% 
+  filter(n_ages == 5, min_age == 1, max_age == 5) %>% 
   group_by(lake_id) %>%
   filter(n_distinct(exposure) == 2) %>% 
-  pull(lake_id)
+  distinct(lake_id) %>% 
+  pull(lake_id) 
 
 wae_filtered <- wae %>%
   filter(lake_id %in% valid_lakes,
@@ -221,7 +222,12 @@ wae_filtered %>%
             min = min(est_age),
             max = max(est_age)) %>% 
   print(n = nrow(.))
+rm(ages_global,
+   ages_within_lake,
+   required_ages,
+   valid_lakes)
 
+#fit model
 fit_wae <- brm(length_1 ~ est_age * exposure + (1|lake_id),
                data = wae,
                family = gaussian(),
