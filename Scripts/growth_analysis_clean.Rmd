@@ -6,6 +6,12 @@ editor_options:
   chunk_output_type: console
 ---
 
+Update on 4/16/2026:
+This filtering was created on the estimated age, where we do not include fish that were born before invasion but captured after (mixed). However, we should maybe consider if an ALK was constructed with "mixed" groups. In that, we filtered out estimated ages, but they could be bias if an ALK was constructed of fish who lived through invasion. This likely shouldn't be a problem because we should be accurate ALKs that our estimated ages should be representative of the real ages. We also have a filter step such that lakes include years 1-5 with out any missing years.
+
+Future improvements would also be looking at 
+
+
 # library
 ```{r}
 library(tidyverse)
@@ -166,7 +172,6 @@ rm(check, age_check, age_data, valid_groups)
 #now create objects for each species 
 species_list <- split(age_data_filtered, age_data_filtered$species_1)
 ```
-This filtering is created on the estimated age, where we do not accept fish that were born before invasion but captured after (mixed). HOWEVER, if an ALK is created with mixed fish, that effect would then make it to the fish. We should be more careful to filter for where aged fish do not cross the line and then collect back all est aged fish that are from those alks
 
 # model
 ```{r}
@@ -191,10 +196,8 @@ ages_global <- ages_within_lake %>%
     n_lakes = n_distinct(lake_id),
     .groups = "drop"
   )
-#looks reasonable to keep ages 1:7 (throws out a few lakes but maximizes est_ages and # of lakes)
+#looks reasonable to keep ages 1:5 (throws out a few lakes but maximizes est_ages and # of lakes)
 
-#################stopped right here, I need to filter for cases where ages exsits before and after AND across all lakes, it was breaking for some reason right here... looks like some "drop" exposure was coming back########
-#I think i found why - I had exposure spelt wrong in the fitler above - rerun and check
 required_ages <- 1:5
 
 valid_lakes <- wae %>%
@@ -227,12 +230,36 @@ rm(ages_global,
    required_ages,
    valid_lakes)
 
+wae_filtered <- wae_filtered %>% 
+  mutate(est_age = as.factor(est_age))
+
 #fit model
-fit_wae <- brm(length_1 ~ est_age * exposure + (1|lake_id),
-               data = wae,
-               family = gaussian(),
-               chains = 3,
-               iter = 5000,
-               warmup = 1000)
+fit_wae <- brm(
+  length_1 ~ est_age * exposure + (1 | lake_id),
+  data = wae_filtered,
+  family = gaussian(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  backend = "cmdstanr",
+  threads = threading(2), 
+  control = list(
+    adapt_delta = 0.95,
+    max_treedepth = 12))
+
+saveRDS(fit_wae, file.path("D:",
+                          "Shared drives",
+                          "Hansen Lab",
+                          "RESEARCH PROJECTS",
+                          "MAISRC Mercury Pathways 53.2",
+                          "Growth Analysis",
+                          "length_mean_ages_wae.rds"))
+```
+
+# output
+```{r}
+plot(fit_wae)
+summary(fit_wae)
 ```
 
