@@ -1,0 +1,132 @@
+---
+title: "growth_analysis_clean"
+output: html_document
+date: "2026-04-15"
+editor_options: 
+  chunk_output_type: console
+---
+
+# library
+```{r}
+library(tidyverse)
+library(arrow)
+library(ggplot2)
+library(dplyr)
+library(sf)
+library(ggspatial)
+library(ggthemes)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(leaflet)
+library(brms)
+#speeds up model fitting
+library(cmdstanr)
+options(brms.backend = "cmdstanr")
+```
+
+# data
+```{r}
+#reading in the updated Minnesota data
+mn_data <- open_dataset(sources = file.path("D:",
+                                            "Shared drives",
+                                            "Hansen Lab",
+                                            "RESEARCH PROJECTS",
+                                            "Fish Survey Data",
+                                            "Parquet files",
+                                            "mn_update")) %>% 
+  filter(state == "Minnesota" & !is.na(est_age))
+
+zm_ssw <- read_csv(file.path("D:",
+                             "Shared drives",
+                             "Hansen Lab",
+                             "RESEARCH PROJECTS",
+                             "MAISRC Mercury Pathways 53.2",
+                             "Data",
+                             "zm_ssw_6jan2026.csv")) %>% 
+  #filter out na dows or those "none"
+  filter(!is.na(dow) & !(str_detect(dow, "n"))) %>% 
+  #generate original id for reference
+  mutate(original_id = dow) %>% 
+  #remove dashes
+  #make sure short dows are 8 digits
+  #fix a few manually
+  #remove leading 0s to match the fish data
+  mutate(dow = str_replace_all(dow, pattern = "-", ""),
+         dow = if_else(nchar(dow) == 6, paste0(dow, "00"), dow),
+         dow = case_when(dow == "10179" ~ "01017900",
+                         str_detect(dow, "040063") ~ "04006300",
+                         TRUE ~ dow),
+         dow = case_when(str_starts(dow, "0") ~ str_sub(dow, 2),
+                         TRUE ~ dow))  %>% 
+  #rename dow to match fishereis column
+  rename(lake_id = dow) %>% 
+  #pivot to lake per row, with zm and starry columns 
+  pivot_wider(id_cols = c(lake_id, lake_name),
+              names_from = ais,
+              values_from = year_infested,
+              values_fn = min) %>% 
+  rename(zm = `zebra mussel`,
+         ssw = `starry stonewort`)
+
+#crosswalk - get lat and lon from fish data
+xwalk <- open_dataset(sources = file.path("D:",
+                                            "Shared drives",
+                                            "Hansen Lab",
+                                            "RESEARCH PROJECTS",
+                                            "Fish Survey Data",
+                                            "Parquet files",
+                                            "mn_update")) %>% 
+  select(state, latitude_lake_centroid, lake_id, longitude_lake_centroid) %>% 
+  filter(state == "Minnesota") %>% 
+  filter(!is.na(latitude_lake_centroid) & !is.na(lake_id)) %>% 
+  distinct(lake_id, latitude_lake_centroid, longitude_lake_centroid) %>% 
+  collect()
+```
+
+# filter for analysis 
+```{r}
+age_data.check <- mn_data %>% 
+  #filter MN data for fish with alked year level data
+  filter(alk == "year") %>% 
+  #filtering join to the lake-species combos we want
+  right_join(lake_species_sub, by = c("lake_id", "species_1"), suffix = c("_fish", "_invasion")) %>% 
+  collect() %>% 
+  #selecting columns important from the fish data that are relevant 
+  select(lake_id,
+         nhdhr_id,
+         date_total_effort_ident,
+         date_sample,
+         year,
+         sampling_method,
+         site_id,
+         species_1,
+         length_1,
+         length_unit_1,
+         age,
+         aging_structure_1,
+         sex,
+         est_age,
+         alk,
+         alk_age_str,
+         alk_length,
+         alk_n,
+         weight_1,
+         weight_unit_1,
+         flag,
+         notes_1) %>% 
+  #bring in invasion data 
+  left_join(zm_ssw, by = "lake_id") %>% 
+  #create columns for invasion impact for both invaders
+  mutate(impact_zm = case_when(year >= zm ~ "after",
+                               year < zm ~ "before",
+                               TRUE ~ NA),
+         impact_zm_years = year - zm,
+         impact_ssw = case_when(year >= ssw ~ "after",
+                                year < ssw ~ "before",
+                                TRUE ~ NA),
+         ais = case_when(!is.na(zm) & is.na(ssw) ~ "zm",
+                         !is.na(ssw) & is.na(zm) ~ "ssw",
+                         !is.na(ssw) & !is.na(zm) ~ "both",
+                         is.na(ssw) & is.na(zm) ~ "none")) 
+```
+
