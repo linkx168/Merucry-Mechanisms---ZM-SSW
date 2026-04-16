@@ -88,7 +88,32 @@ xwalk <- open_dataset(sources = file.path("D:",
 age_data.check <- mn_data %>% 
   #filter MN data for fish with alked year level data
   filter(alk == "year") %>% 
-  #filtering join to the lake-species combos we want
+  left_join(zm_ssw, by = "lake_id") %>% 
+  select(lake_id,
+         nhdhr_id,
+         date_total_effort_ident,
+         date_sample,
+         year,
+         sampling_method,
+         site_id,
+         species_1,
+         length_1,
+         length_unit_1,
+         age,
+         aging_structure_1,
+         sex,
+         est_age,
+         alk,
+         alk_age_str,
+         alk_length,
+         alk_n,
+         weight_1,
+         weight_unit_1,
+         flag,
+         notes_1,
+         zm) %>% 
+  collect()
+  
   right_join(lake_species_sub, by = c("lake_id", "species_1"), suffix = c("_fish", "_invasion")) %>% 
   collect() %>% 
   #selecting columns important from the fish data that are relevant 
